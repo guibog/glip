@@ -127,6 +127,7 @@ def _choose_color(conf, section):
 
 def check_files(conf, checker, files):
     prev_debug_level = logger.level
+    no_color = gbool(conf.get(checker, 'no_color'))
     if gbool(conf.get(checker, 'debug')):
         logger.setLevel(logging.DEBUG)
     files = [fn for fn in files if is_relevant(conf, checker, fn)]
@@ -142,7 +143,7 @@ def check_files(conf, checker, files):
     deb("Command called, exit_code: %s, len(stdout): %s, len(stderr): %s" % (
         exit_code, len(stdout), len(stderr)))
     maxlines = int(conf.get(checker, 'maxlines'))
-    colorize = conf.get(checker, 'color')
+    colorize = conf.get(checker, 'color') and not no_color
     if colorize and not colorize in bcolors:
         colorize = _choose_color(conf, checker)
     fmt = {
@@ -195,9 +196,7 @@ def run_checks(conf, blocking, nonblocking, files):
     return False, count
 
 def main_call(conf_file, files, cmd_opts):
-    for k in defaults:
-        if None or k in cmd_opts.__dict__:
-            defaults[k] = str(cmd_opts.__dict__[k])  # ConfigParser prefer string :(
+    defaults.update(cmd_opts.__dict__.items())
     try:
         conf, blocking, nonblocking = setup_conf(conf_file, defaults)
     except GlipError, err:
@@ -255,10 +254,10 @@ def handle_not_in_hook(code, count, err):
 def main():
     in_hook = 'GIT_DIR' in os.environ
     optp = optparse.OptionParser()
-    optp.add_option('-c', '--conf', default=DEFAULT_CONFIG_FILE, help='path to config file, default is %s' % DEFAULT_CONFIG_FILE)
-    optp.add_option('-m', '--modified', action='store_true', help='check also modified but unstaged files, default true when no used as git hook')
+    optp.add_option('-c', '--conf', default=DEFAULT_CONFIG_FILE, help='Path to config file, default is %s' % DEFAULT_CONFIG_FILE)
+    #optp.add_option('-m', '--modified', action='store_true', help='check also modified but unstaged files, default true when no used as git hook')
     optp.add_option('-d', '--debug', action='store_true')
-    optp.add_option('--color', action='store_true', help='colorize output')
+    optp.add_option('--no-color', action='store_const', const='true', help='Do not colorize output')
     opts, files = optp.parse_args()
     if opts.debug:
         logger.setLevel(logging.DEBUG)
