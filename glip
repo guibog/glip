@@ -1,16 +1,35 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 """
-Glip-hook is a git pre-commit hook checking for code slips (or `glips')
+Glip is a gummy code check gonfigurator, mostly useful
+as a git pre-commit hook.
 
-Uses a config file in same directory, name is glip-hook.cfg
+« I will be catching your code glips! »
 
-Install with
+Tweak the configuration file to your needs, you can
+plug jshint, pep8, grep, any other command line tool
+available.
+
+The default config-file is `glip-hook.cfg', see its
+comments.
+
+Can be run directly, try `./glip tests/test*`.
+
+Usage as a git pre-commit hook
+------------------------------
+
 $ cat > .git/hooks/pre-commit
 #!/bin/sh
-bin/glip.py -c ../git-hook-pre-commit.cfg
+<path-to>/glip -c <path-to>/glip-hook.cfg
+<ctrl-D>
 $ chmod -x .git/hooks/pre-commit
 """
+
+# Version 0.1
+# Author: guibog@gmail.com
+
+# TODO
+# - Have glip as hook check only staged content
 
 import os
 import logging
