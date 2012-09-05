@@ -1,0 +1,279 @@
+#!/usr/bin/env python
+# -*- coding: utf-8 -*-
+"""
+Glip-hook is a git pre-commit hook checking for code slips (or `glips')
+
+Uses a config file in same directory, name is glip-hook.cfg
+
+Install with
+$ cat > .git/hooks/pre-commit
+#!/bin/sh
+bin/glip.py -c ../git-hook-pre-commit.cfg
+$ chmod -x .git/hooks/pre-commit
+"""
+
+import os
+import logging
+import glob
+from subprocess import Popen, PIPE
+import sys
+import ConfigParser
+import optparse
+import shlex
+
+DEFAULT_CONFIG_FILE = 'glip-hook.cfg'
+
+class GlipError(Exception):
+    pass
+
+logging.basicConfig()
+logger = logging.getLogger('glip-hook')
+#logger.setLevel(logging.DEBUG)
+warn = logger.warn
+inf = logger.info
+deb = logger.debug
+
+defaults = {
+    'debug': 'False',
+    'blocking': 'False',
+    'ignore': '',
+    'showstdout': 'True',
+    'showstderr': 'False',
+    'maxlines': '20',
+    'color': '',
+}  # Needed strings, ConfigParser don't behave when defaults are bools
+
+
+def cmdcall(command, shell=False):
+    """Runs a command and returns a triple with the output: (returnvalue, stdout, stderr)"""
+    try:
+        args = shlex.split(command)
+    except AttributeError:
+        # Already a list
+        args = command
+    proc = Popen(args, stdout=PIPE, stderr=PIPE, shell=shell)
+    proc.wait()
+    return proc.returncode, [l.rstrip() for l in proc.stdout.readlines()], [l.rstrip() for l in proc.stderr.readlines()]
+
+def files_modified():
+    has_head, _, _ = cmdcall("git rev-parse --verify HEAD >/dev/null 2>&1")
+    against = 'HEAD' if has_head else '4b825dc642cb6eb9a060e54bf8d69288fbee4904'  # Dummy hash if no HEAD yet
+    _, files, _ = cmdcall("git diff --cached --name-only %s" % against)
+    return files
+
+#def check_commiting_lines(checker, files):  # MAYBE USE LATER
+#    exitcode = 0
+#    import re
+#    r = re.compile('print ')
+#    for fname in files:
+#        # Check for added prints
+#        print >>sys.stderr, "Checking for 'print' on %s: ... " %(fname),
+#        _, output, _ = cmdcall("git diff-index -u HEAD %s" %(fname))
+#        found_re = False
+#        for line in output:
+#            if r.search(line):
+#                if not found_re:
+#                    print >>sys.stderr, "\rChecking for 'print' on %s:" %(fname), bcolors.FAIL, "FAILED!", bcolors.ENDC
+#                    found_re = True
+#                index = output.index(line)
+#                if index > 0:
+#                    print "\t", output[index-1]
+#                print "\t", bcolors.FAIL, line, bcolors.ENDC
+#                if len(output) > index:
+#                    print "\t", output[index+1]
+#        if found_re:
+#            exitcode = 1
+#        else:
+#            print >>sys.stderr, "\rChecking for 'print' on %s:" %(fname), bcolors.OKGREEN, "OK!", bcolors.ENDC
+#    return exitcode
+
+def is_relevant(conf, checker, fname):
+    _, fext = os.path.splitext(fname)
+    allowed_exts = conf.get(checker, 'exts').split(' ')
+    if not fext in allowed_exts:
+        deb("File %s with extension %s is not relevant to checker %s with exts = %s" %
+            (fname, fext, checker, allowed_exts))
+        return False
+    ignores = conf.get(checker, 'ignore').split(' ')
+    if not ignores:
+        return True
+    if any(glob.fnmatch.fnmatch(fname, ign) for ign in ignores):
+        deb("File %s is ignored by checker %s with ignore = %s" %
+            (fname, checker, ignores))
+        return False
+    else:
+        return True
+
+bcolors_conf = """
+green   : \033[92m
+yellow  : \033[93m
+cyan    : \033[96m
+magenta : \033[95m
+blue    : \033[94m
+gray    : \033[90m
+red     : \033[91m
+"""
+
+bcolors_pairs = [map(lambda x: x.strip(), l.split(':'))
+    for l in bcolors_conf.split('\n') if l]
+bcolors = dict(bcolors_pairs)
+bcolors_keys = [k for k, _ in bcolors_pairs]
+
+bcolors_endc = '\033[0m'
+
+def _choose_color(conf, section):
+    index = sorted(conf.sections()).index(section)
+    return bcolors_keys[index % len(bcolors)]
+
+def check_files(conf, checker, files):
+    prev_debug_level = logger.level
+    if gbool(conf.get(checker, 'debug')):
+        logger.setLevel(logging.DEBUG)
+    files = [fn for fn in files if is_relevant(conf, checker, fn)]
+    if not files:
+        deb("No files relevant for checker %s" % checker)
+        return 0
+    deb("Running checker %s on files %s" % (checker, files))
+    command = conf.get(checker, 'command')
+    deb("Running command: %s" % command)
+    args = shlex.split(command)
+    args.extend(files)
+    exit_code, stdout, stderr = cmdcall(args)
+    deb("Command called, exit_code: %s, len(stdout): %s, len(stderr): %s" % (
+        exit_code, len(stdout), len(stderr)))
+    maxlines = int(conf.get(checker, 'maxlines'))
+    colorize = conf.get(checker, 'color')
+    if colorize and not colorize in bcolors:
+        colorize = _choose_color(conf, checker)
+    fmt = {
+        'checker': checker,
+        'col': bcolors[colorize] if colorize else '',
+        'endc': bcolors_endc if colorize else '',
+    }
+    if gbool(conf.get(checker, 'showstderr')):
+        for line in stderr[:maxlines]:
+            fmt['line'] = line
+            print >> sys.stderr, "glip %s:%s" % (checker, line)
+    if gbool(conf.get(checker, 'showstdout')):
+        for line in stdout[:maxlines]:
+            fmt['line'] = line
+            print >> sys.stdout, "{col}{checker}{endc}:{line}".format(**fmt)
+    logger.setLevel(prev_debug_level)
+    return len(stdout)
+
+def gbool(str_):
+    if not str_:
+        return False
+    str_ = str_.strip().lower()
+    if str_ in ['yes', 'true', 'y', 1, '1', 'da', 'oui']:
+        return True
+    elif str_ in ['no', 'none', 'false', 'n', 0, '0', 'niet', 'nein', '否']:
+        return False
+    else:
+        raise GlipError("Boolean value unknown: %s" % str_)
+
+def setup_conf(conf_file, defaults):
+    conf = ConfigParser.SafeConfigParser(defaults)
+    if not os.path.exists(conf_file):
+        raise GlipError("Config file %s not found" % conf_file)
+    try:
+        conf.read(conf_file)
+    except ConfigParser.MissingSectionHeaderError:
+        raise GlipError("Incorrect format for config file %s, it should have a section header" % conf_file)
+    blocking = [c for c in conf.sections() if gbool(conf.get(c, 'blocking'))]
+    nonblocking = [c for c in conf.sections() if not gbool(conf.get(c, 'blocking'))]
+    return conf, blocking, nonblocking
+
+def run_checks(conf, blocking, nonblocking, files):
+    for checker in blocking:
+        count = check_files(conf, checker, files)
+        if count > 0:
+            return count, None  # Stop at first blocking error
+    count = 0
+    for checker in nonblocking:
+        count += check_files(conf, checker, files)
+    return False, count
+
+def main_call(conf_file, files, cmd_opts):
+    for k in defaults:
+        if None or k in cmd_opts.__dict__:
+            defaults[k] = str(cmd_opts.__dict__[k])  # ConfigParser prefer string :(
+    try:
+        conf, blocking, nonblocking = setup_conf(conf_file, defaults)
+    except GlipError, err:
+        return 'glip_error', 0, err
+    blocking, count = run_checks(conf, blocking, nonblocking, files)
+    if blocking:
+        return 'glip_block', 1, None
+    elif not blocking and count > 0:
+        return 'glip_noblock', count, None
+    else:
+        assert not blocking and not count
+        return 'glip_pass', 0, None
+
+def handle_in_hook(code, count, err):
+    _HOOK_PASS, _HOOK_BLOCK = 0, 1
+    if code == 'glip_error':
+        warn(err)
+        sys.stdin = open('/dev/tty')
+        msg = "Error in hook, commit anyway? (N/y)" % count
+        answer = raw_input(msg)
+        if answer.strip().lower() in ['y', 'yes']:
+            return _HOOK_PASS
+        else:
+            inf("Commit cancelled")
+            return _HOOK_BLOCK
+    if code == 'glip_block':
+        print "Blocking glips have been detected, please fix before commiting."
+        return _HOOK_BLOCK
+    if code == 'glip_noblock':
+        sys.stdin = open('/dev/tty')
+        msg = "%s non-blocking glips have been detected, commit anyway? (N/y)" % count
+        if raw_input(msg).strip().lower() in ['y', 'yes']:
+            inf("Hook bypassed, commit should be effective")
+            return _HOOK_PASS
+        else:
+            inf("Commit cancelled")
+            return _HOOK_BLOCK
+    if code == 'glip_pass':
+        return _HOOK_PASS
+
+def handle_not_in_hook(code, count, err):
+    _OK, _FAIL, _ERR = 0, 1, 2
+    if code == 'glip_error':
+        warn(err)
+        return _ERR
+    if code == 'glip_block':
+        print "Blocking glips have been detected."
+        return _FAIL
+    if code == 'glip_noblock':
+        print "%s unblocking glips have been detected." % count
+        return _FAIL
+    if code == 'glip_pass':
+        return _OK
+
+def main():
+    in_hook = 'GIT_DIR' in os.environ
+    optp = optparse.OptionParser()
+    optp.add_option('-c', '--conf', default=DEFAULT_CONFIG_FILE, help='path to config file, default is %s' % DEFAULT_CONFIG_FILE)
+    optp.add_option('-m', '--modified', action='store_true', help='check also modified but unstaged files, default true when no used as git hook')
+    optp.add_option('-d', '--debug', action='store_true')
+    optp.add_option('--color', action='store_true', help='colorize output')
+    opts, files = optp.parse_args()
+    if opts.debug:
+        logger.setLevel(logging.DEBUG)
+    config_file = opts.conf
+    assert not (in_hook and files), "No filename arguments should be passed when in hook"
+    if not files:
+        files = files_modified()
+    code, count, err = main_call(config_file, files, opts)
+    if in_hook:
+        exitcode = handle_in_hook(code, count, err)
+        deb("Commit checked, exit with status %s, will %scommit" %
+            (exitcode, 'not ' if exitcode != 0 else ''))
+    else:
+        exitcode = handle_not_in_hook(code, count, err)
+    sys.exit(exitcode)
+
+if __name__ == '__main__':
+    main()
