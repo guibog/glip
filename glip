@@ -45,7 +45,7 @@ DEFAULT_CONFIG_FILE = 'glip-hook.cfg'
 class GlipError(Exception):
     pass
 
-logging.basicConfig()
+logging.basicConfig(format='%(levelname)s: %(message)s')
 logger = logging.getLogger('glip-hook')
 #logger.setLevel(logging.DEBUG)
 warn = logger.warn
@@ -60,7 +60,7 @@ defaults = {
     'showstderr': 'False',
     'maxlines': '20',
     'color': '',
-}  # Needed strings, ConfigParser don't behave when defaults are bools
+}  # Need strings, ConfigParser don't behave when defaults are bools
 
 
 def cmdcall(command, shell=False):
@@ -77,8 +77,10 @@ def cmdcall(command, shell=False):
 def files_modified():
     has_head, _, _ = cmdcall("git rev-parse --verify HEAD >/dev/null 2>&1")
     against = 'HEAD' if has_head else '4b825dc642cb6eb9a060e54bf8d69288fbee4904'  # Dummy hash if no HEAD yet
+    # TODO use plumbing command git diff-index
     _, files, _ = cmdcall("git diff --cached --name-only %s" % against)
     return files
+
 
 #def check_commiting_lines(checker, files):  # MAYBE USE LATER
 #    exitcode = 0
@@ -123,58 +125,63 @@ def is_relevant(conf, checker, fname):
     else:
         return True
 
-bcolors_conf = """
-green   : \033[92m
-yellow  : \033[93m
-cyan    : \033[96m
-magenta : \033[95m
-blue    : \033[94m
-gray    : \033[90m
-red     : \033[91m
-"""
-
-bcolors_pairs = [map(lambda x: x.strip(), l.split(':'))
-    for l in bcolors_conf.split('\n') if l]
-bcolors = dict(bcolors_pairs)
-bcolors_keys = [k for k, _ in bcolors_pairs]
-
-bcolors_endc = '\033[0m'
+class col(object):
+    _conf = """
+        green   : \033[92m
+        yellow  : \033[93m
+        cyan    : \033[96m
+        magenta : \033[95m
+        blue    : \033[94m
+        gray    : \033[90m
+        red     : \033[91m
+    """
+    _pairs = [
+        map(lambda x: x.strip(), l.strip().split(':'))
+        for l in _conf.split('\n') if l.strip()
+    ]
+    ors = dict(_pairs)
+    keys = [k for k, _ in _pairs]
+    endc = '\033[0m'
 
 def _choose_color(conf, section):
     index = sorted(conf.sections()).index(section)
-    return bcolors_keys[index % len(bcolors)]
+    return col.keys[index % len(col.ors)]
 
 def check_files(conf, checker, files):
+    cf = lambda x: conf.get(checker, x)
+    bcf = lambda x: gbool(conf.get(checker, x))
     prev_debug_level = logger.level
-    no_color = gbool(conf.get(checker, 'no_color'))
-    if gbool(conf.get(checker, 'debug')):
+    no_color = bcf('no_color')
+    if bcf('debug'):
         logger.setLevel(logging.DEBUG)
     files = [fn for fn in files if is_relevant(conf, checker, fn)]
     if not files:
         deb("No files relevant for checker %s" % checker)
         return 0
+    if bcf('verbose'):
+        inf("Checker %s, seeing %s files" % (checker, len(files)))
     deb("Running checker %s on files %s" % (checker, files))
-    command = conf.get(checker, 'command')
+    command = cf('command')
     deb("Running command: %s" % command)
     args = shlex.split(command)
     args.extend(files)
     exit_code, stdout, stderr = cmdcall(args)
     deb("Command called, exit_code: %s, len(stdout): %s, len(stderr): %s" % (
         exit_code, len(stdout), len(stderr)))
-    maxlines = int(conf.get(checker, 'maxlines'))
-    colorize = conf.get(checker, 'color') and not no_color
-    if colorize and not colorize in bcolors:
+    maxlines = int(cf('maxlines'))
+    colorize = cf('color') and not no_color
+    if colorize and not colorize in col.ors:
         colorize = _choose_color(conf, checker)
     fmt = {
         'checker': checker,
-        'col': bcolors[colorize] if colorize else '',
-        'endc': bcolors_endc if colorize else '',
+        'col': col.ors[colorize] if colorize else '',
+        'endc': col.endc if colorize else '',
     }
-    if gbool(conf.get(checker, 'showstderr')):
+    if bcf('showstderr'):
         for line in stderr[:maxlines]:
             fmt['line'] = line
             print >> sys.stderr, "glip %s:%s" % (checker, line)
-    if gbool(conf.get(checker, 'showstdout')):
+    if bcf('showstdout'):
         for line in stdout[:maxlines]:
             fmt['line'] = line
             print >> sys.stdout, "{col}{checker}{endc}:{line}".format(**fmt)
@@ -275,11 +282,14 @@ def main():
     optp = optparse.OptionParser()
     optp.add_option('-c', '--conf', default=DEFAULT_CONFIG_FILE, help='Path to config file, default is %s' % DEFAULT_CONFIG_FILE)
     #optp.add_option('-m', '--modified', action='store_true', help='check also modified but unstaged files, default true when no used as git hook')
-    optp.add_option('-d', '--debug', action='store_true')
+    optp.add_option('-d', '--debug', action='store_const', const='true')
+    optp.add_option('-v', '--verbose', action='store_const', const='true')
     optp.add_option('--no-color', action='store_const', const='true', help='Do not colorize output')
     opts, files = optp.parse_args()
     if opts.debug:
         logger.setLevel(logging.DEBUG)
+    elif opts.verbose:
+        logger.setLevel(logging.INFO)
     config_file = opts.conf
     assert not (in_hook and files), "No filename arguments should be passed when in hook"
     if not files:
