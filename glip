@@ -147,6 +147,17 @@ def _choose_color(conf, section):
     index = sorted(conf.sections()).index(section)
     return col.keys[index % len(col.ors)]
 
+def find_conffile(conffile):
+    deb('Searching config file %s' % conffile)
+    path = [os.curdir, os.path.expanduser('~')]
+    for p in path:
+        tryp = os.path.abspath(os.path.join(p, conffile))
+        deb('Trying path %s' % tryp)
+        if os.path.exists(tryp):
+            deb('Found configuration file: %s' % tryp)
+            return tryp
+    return conffile
+
 def check_files(conf, checker, files):
     cf = lambda x: conf.get(checker, x)
     bcf = lambda x: gbool(conf.get(checker, x))
@@ -221,10 +232,10 @@ def run_checks(conf, blocking, nonblocking, files):
         count += check_files(conf, checker, files)
     return False, count
 
-def main_call(conf_file, files, cmd_opts):
+def main_call(conffile, files, cmd_opts):
     defaults.update(cmd_opts.__dict__.items())
     try:
-        conf, blocking, nonblocking = setup_conf(conf_file, defaults)
+        conf, blocking, nonblocking = setup_conf(conffile, defaults)
     except GlipError, err:
         return 'glip_error', 0, err
     blocking, count = run_checks(conf, blocking, nonblocking, files)
@@ -290,11 +301,11 @@ def main():
         logger.setLevel(logging.DEBUG)
     elif opts.verbose:
         logger.setLevel(logging.INFO)
-    config_file = opts.conf
+    conffile = find_conffile(opts.conf)
     assert not (in_hook and files), "No filename arguments should be passed when in hook"
     if not files:
         files = files_modified()
-    code, count, err = main_call(config_file, files, opts)
+    code, count, err = main_call(conffile, files, opts)
     if in_hook:
         exitcode = handle_in_hook(code, count, err)
         deb("Commit checked, exit with status %s, will %scommit" %
