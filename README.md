@@ -10,5 +10,5 @@ To use as git hook:
     <path-to>/glip -c <path-to>/glip-hook.cfg
     <ctrl-D>
     $ chmod -x .git/hooks/pre-commit
-    
+
 See inline doc in glip/glip-hook.cfg
