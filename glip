@@ -168,7 +168,7 @@ def check_files(conf, checker, files):
     files = [fn for fn in files if is_relevant(conf, checker, fn)]
     if not files:
         deb("No files relevant for checker %s" % checker)
-        return 0
+        return True, 0
     if bcf('verbose'):
         inf("Checker %s, seeing %s files" % (checker, len(files)))
     deb("Running checker %s on files %s" % (checker, files))
@@ -188,6 +188,7 @@ def check_files(conf, checker, files):
         'col': col.ors[colorize] if colorize else '',
         'endc': col.endc if colorize else '',
     }
+    ok = False if stderr else True
     if bcf('showstderr'):
         for line in stderr[:maxlines]:
             fmt['line'] = line
@@ -197,7 +198,7 @@ def check_files(conf, checker, files):
             fmt['line'] = line
             print >> sys.stdout, "{col}{checker}{endc}:{line}".format(**fmt)
     logger.setLevel(prev_debug_level)
-    return len(stdout)
+    return ok, len(stdout)
 
 def gbool(str_):
     if not str_:
@@ -224,13 +225,13 @@ def setup_conf(conf_file, defaults):
 
 def run_checks(conf, blocking, nonblocking, files):
     for checker in blocking:
-        count = check_files(conf, checker, files)
-        if count > 0:
-            return count, None  # Stop at first blocking error
-    count = 0
-    for checker in nonblocking:
-        count += check_files(conf, checker, files)
-    return False, count
+        ok, count = check_files(conf, checker, files)
+        if not ok or count > 0:
+            return ok, count, None  # Stop at first blocking error
+    checks = [(checker, check_files(conf, checker, files)) for checker in nonblocking]
+    sum_ = sum(c for _, (_, c) in checks)
+    ok = all(k for _, (k, c) in checks)
+    return ok, False, sum_
 
 def main_call(conffile, files, cmd_opts):
     defaults.update(cmd_opts.__dict__.items())
@@ -238,7 +239,9 @@ def main_call(conffile, files, cmd_opts):
         conf, blocking, nonblocking = setup_conf(conffile, defaults)
     except GlipError, err:
         return 'glip_error', 0, err
-    blocking, count = run_checks(conf, blocking, nonblocking, files)
+    ok, blocking, count = run_checks(conf, blocking, nonblocking, files)
+    if not ok:
+        return 'glip_error', 0, 'A checker is broken'
     if blocking:
         return 'glip_block', 1, None
     elif not blocking and count > 0:
