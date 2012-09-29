@@ -241,7 +241,7 @@ def handle_in_hook(code, count, err):
     if code == 'glip_error':
         warn(err)
         sys.stdin = open('/dev/tty')
-        msg = "Error in hook, commit anyway? (N/y)" % count
+        msg = "Error in hook, commit anyway? (N/y)"
         answer = raw_input(msg)
         if answer.strip().lower() in ['y', 'yes']:
             return _HOOK_PASS
